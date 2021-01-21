@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azkaban
+  namespace: ${APP_NAMESPACE}
+  labels:
+    component: stag-azkaban
+spec:
+  selector:
+    matchLabels:
+      app: azkaban
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: azkaban
+    spec:
+      containers:
+      - name: azkaban
+        image: ${IMAGE_NAME_AZKABAN}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 9091
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 2
+          limits:
+            memory: 8Gi
+            cpu: 4
+        livenessProbe:
+          exec:
+            command:
+            - cat
+            - /app/azkaban_service/health.txt
+          failureThreshold: 3
+          initialDelaySeconds: 60
+          periodSeconds: 15
+          successThreshold: 1
+          timeoutSeconds: 1
+        volumeMounts:
+        - name: logs
+          mountPath: "/app/logs/web"
+      restartPolicy: Always
+      imagePullSecrets:
+      - name: gitlab
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: podinfo
+        downwardAPI:
+          items:
+          - path: "labels"
+            fieldRef:
+              fieldPath: metadata.labels
+          - path: "uid"
+            fieldRef:
+              fieldPath: metadata.uid
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: azkaban-scaler
+  namespace: ${APP_NAMESPACE}
+  labels:
+    component: stag-azkaban
+spec:
+  scaleTargetRef:
+    kind: ReplicaSet
+    name: azkaban
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: azkabanservice
+  namespace: ${APP_NAMESPACE}
+  labels:
+    component: stag-azkaban
+spec:
+  selector:
+    app: azkaban
+  ports:
+    - port: 80
+      targetPort: 9091
+  type: LoadBalancer
+  loadBalancerSourceRanges:
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  name: azkaban-ingress
+  namespace: ${APP_NAMESPACE}
+spec:
+  rules:
+  - host: ${AZKABAN_HOST}
+    http:
+      paths:
+      - backend:
+          serviceName: azkabanservice
+          servicePort: 9091
